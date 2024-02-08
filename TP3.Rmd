@@ -8,6 +8,108 @@ date: "2024-02-08"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+
+les packages utilisés
+
+```{r}
+# Chargement des packages
+library(dplyr)
+library(sf) 
+library(mapsf) 
+library(classInt) 
+library(leaflet)
+library(openxlsx)
+```
 ## Exercice 1
 
+Le but de cet exercice est de discrétiser une variable continue et d’en observer les diﬀérents résultats selon la méthode choisie
+
+
+### Question1
+
+ Commencez par vous créer votre jeu de données (jointure et création de variable). Attention avant de joindre vos données, il vous faudra d’abord homogénéiser la commune de Paris. Dans un ﬁchier (fond communal), Paris est renseigné sous son code communal (75056). Dans l’autre, Paris est renseigné par arrondissement (75101 à 75120). Vous devrez donc regrouper les arrondissements pour avoir une seule ligne pour Paris. Cette ligne sera renseignée avec le CODGEO 75056
+
+```{r}
+# Import des donnees 
+# Fond communes France metropolitaine
+communes_fm<- st_read("Fonds_carte/France_metro/commune_francemetro_2021.shp", options = "ENCODING=WINDOWS-1252") %>% 
+  select(code,libelle,surf)
+
+# Import des population légales des communes en 2019
+pop_com_2019<-openxlsx::read.xlsx("Fonds_carte/Donnees/Pop_legales_2019.xlsx")
+
+# Correction pour la ville de Paris
+pop_com_2019<-pop_com_2019 %>% 
+  mutate(COM=if_else(substr(COM,1,3)=="751","75056",COM)) %>% 
+  group_by(code=COM) %>% 
+  summarise(pop=sum(PMUN19))
+
+# Jointure
+communes_fm<-communes_fm %>% 
+  left_join(pop_com_2019,
+            by="code") %>% 
+  mutate(densite=pop/surf)
+```
+
+### Question 2:
+
+Regarder rapidement la distribution de la variable de densite
+
+```{r}
+summary(communes_fm$densite)
+hist(communes_fm$densite, main = "Distribution de la densité", xlab = "Densité")
+```
+```{r}
+library(ggplot2)
+
+# Créer un histogramme avec ggplot
+ggplot(communes_fm, aes(x = densite)) +
+  geom_histogram(binwidth = 20, fill = "skyblue", color = "black") +
+  labs(title = "Distribution de la densité",
+       x = "Densité",
+       y = "Fréquence")
+
+```
+### Question 3:
+
+On souhaite représenter la variable de densite sous forme d’une carte choroplèthe. Faire cela en utilisant la fonction plot(). La variable de densité sera selectionnée par les crochets sur le modèle suivant : ma_table["ma_variable_continue"]. Ajouter également l’argument border=FALSE pour supprimer les bordures des polygônes.
+
+```{r}
+# Sélectionner la variable de densité
+densite <- communes_fm["densite"]
+
+# Tracer la carte choroplèthe
+plot(densite, border = FALSE)
+
+```
+### Question 4:
+
+On se rend compte que la carte est peu informative et qu’il vaut mieux discrétiser notre variable.
+Représenter le résultat de la discrétisation de la densité de population selon les méthodes des quantiles, jenks et des écarts-types, ainsi que la méthode pretty. Vous utiliserez la fonction plot en ajoutant l’argument breaks= + le nom de la méthode. Vous analyserez les diﬀérences entre les diﬀérentes cartes.
+Laquelle retiendriez-vous? Pourquoi?
+
+```{r}
+# Discrétisation de la variable de densité selon les différentes méthodes
+plot(densite, breaks="quantile", main="quantile", border = FALSE)
+plot(densite, breaks="sd", main="sd", border = FALSE)
+plot(densite, breaks="jenks", main="jenks", border = FALSE)
+plot(densite, breaks="pretty", main="pretty", border = FALSE)
+```
+Les cartes sont différentes suivant la méthode utilisée. En utilisant la méthode des quantiles, 
+
+### Question 5:
+
+Pour obtenir une classiﬁcation satisfaisante, il faut pouvoir comparer la distribution de la variable continue avec celle de la variable discrétisée. Le package classInt est très utile pour construire et analyser les classes.
+
+a. Discrétiser la variable de densité avec la fonction classInt::classIntervals avec la méthode des quantiles (argument style) et 5 classes (argument n). Vous pourrez vous appuyer sur le modèle suivant :
+
+```{r}
+objet_decoupe <- classIntervals( communes_fm$densite,
+style = "quantile",
+n = 5
+)
+
+```
+
+l'objet obtenu contient deux informations: 
 
