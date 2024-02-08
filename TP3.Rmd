@@ -95,7 +95,9 @@ plot(densite, breaks="sd", main="sd", border = FALSE)
 plot(densite, breaks="jenks", main="jenks", border = FALSE)
 plot(densite, breaks="pretty", main="pretty", border = FALSE)
 ```
-Les cartes sont différentes suivant la méthode utilisée. En utilisant la méthode des quantiles, 
+Les cartes sont différentes suivant la méthode utilisée. En utilisant la méthode des quantiles(dans chaque classe il met le même nombre de communes, il y'a un étalement , elle n'est pas trop bonne) , sd(-pour des distributions qui ressemblent à celle normale, construit des classes autour de la moyenne; sd ne marche pas ici car notre distribution n'est pas normale); jenks(comme kmeans, construit des classe qui sont les plus différentes entre elles et plus homogènes dans chaque classe , on aura donc les plus grosses valeurs entre elles)....pretty(essaie de faire des classes jolies)
+ici on laisse faire les breaks automatiquement
+
 
 ### Question 5:
 
@@ -103,13 +105,203 @@ Pour obtenir une classiﬁcation satisfaisante, il faut pouvoir comparer la dist
 
 a. Discrétiser la variable de densité avec la fonction classInt::classIntervals avec la méthode des quantiles (argument style) et 5 classes (argument n). Vous pourrez vous appuyer sur le modèle suivant :
 
+l'objet obtenu contient deux informations: brks (les bornes des intervalles) et var (les valeurs). Plus précisément: 
+
 ```{r}
-objet_decoupe <- classIntervals( communes_fm$densite,
-style = "quantile",
-n = 5
+denspop_quant <- classIntervals(
+  communes_fm$densite,
+  style = "quantile", 
+  n = 5
+)
+str(denspop_quant)
+head(denspop_quant$var)
+denspop_quant$brks 
+```
+
+
+b. Construire une palette de couleurs avec le code suivant:
+
+```{r}
+pal1 <- RColorBrewer::brewer.pal(n = 5, name = "YlOrRd")
+```
+
+Représenter ensuite l’objet précédent (découpage quantile) avec la fonction plot etcette palette de couleur (argument pal=). Vous ajouterez l’argument main à votre fonction plot pour préciser un titre. Analyser le graphique.
+
+```{r}
+plot(
+  denspop_quant,
+  pal = pal1,
+  main = "quantile"
+)
+```
+on a la fonction de répartition de notre var de départ, les communes sont assez pétites,  la derniere classe est très étendue, ce qui est un peu genant.
+
+c. Relancer l’analyse pour les méthodes sd, jenks et pretty. 
+
+```{r}
+analyser_discret <- function(method, nb_classes){
+  denspop_c <- classIntervals(
+    communes_fm$densite,
+    style = method, 
+    n = nb_classes
+  )
+  print(denspop_c$brks)
+  plot(
+    denspop_c,
+    pal = pal1,
+    main = method
+  )
+  return(denspop_c)
+}
+# Avec cinq classes:
+all_discret <- sapply(c("quantile", "sd","pretty","jenks"), analyser_discret, nb_classes = 5)
+```
+
+
+```{r}
+# A partir des informations obtenues, on peut définir nos propres intervalles. 
+quantile(communes_fm$densite, probs = seq(0,1,0.1))
+summary(communes_fm$densite)
+#40 = médiane
+#162 = moyenne
+#on reprend certaines bornes de Jenks - en fusionnant les derniers intervalles
+# Un exemple de découpage manuel avec 7 classes
+denspop_man_brks7 <- c(0,40,162,500,1000,4000,8000,27200)
+# Un exemple de découpage manuel avec 5 classes
+denspop_man_brks5 <- c(0,40,162,1000,8000,27200)
+```
+d. Finalement, on décide de discrétiser notre variable avec les bornes suivantes : [0;40[,[40;162[,[162;1000[,[1000;8000[ et [8000;27200[. Ajouter la variable discrétisée dans le fond communal. Vous utiliserez la fonction `cut`. Vous ferez attention à l'inclusion des bornes inférieures et à l'exclusion des bornes supérieures.
+
+```{r}
+popcomfm_sf <- communes_fm %>%
+  mutate(
+    densite_c = cut(
+      densite,
+      breaks = denspop_man_brks5,
+      include.lowest = TRUE,
+      right = FALSE,
+      ordered_result = TRUE
+    )
+  )
+```
+
+e. Analyser la distribution de cette variable. Représenter la variable discrétisée sur une carte, en créant préalablement une nouvelle palette de couleurs ayant le bon nombre de classes.
+
+```{r}
+table(popcomfm_sf$densite_c)
+pal2 <- c(
+  RColorBrewer::brewer.pal(
+  n=5,
+  name="Greens"
+  )[4:3],
+  RColorBrewer::brewer.pal(
+  n=5,
+  name="YlOrRd"
+  )[c(2,4:5)]
+)
+plot(
+  popcomfm_sf["densite_c"], 
+  pal=pal2, 
+  border = FALSE,
+  main = "Densité de population",
+  )
+```
+
+
+## Exercice 2
+
+Représenter sous forme de carte le taux de pauvreté par département. Vous utiliserez le package mapsf. Vous trouverez de la documentation sur ce package ici. Vous utiliserez le fond “dep_francemetro_2021” ainsi que le ﬁchier “Taux_pauvrete_dept_2021.xlsx” présent dans le dossier “U:/Eleves/Cartographie/Donnees”. Pour l’import de ce ﬁchier, vous pouvez utiliser la fonction openxlsx::read.xlsx().
+
+### Question1
+
+Dans un premier temps, vous pourrez essayer de faire 3 cartes basiques : une en découpant la variables d’intérêt selon la méthode de Fisher (breaks=“ﬁsher”), une autre avec des classes de même amplitude (“equal”) et enﬁn selon la méthode des quantiles (“quantile”)
+
+```{r}
+library(mapsf)
+library(openxlsx)
+library(sf)
+
+```
+
+```{r}
+# Lire le fichier Excel
+donnees <- openxlsx::read.xlsx("Fonds_carte/Donnees/Taux_pauvrete_2018.xlsx")
+
+
+```
+
+```{r}
+# Charger le fond de carte
+dep= st_read("Fonds_carte/France_metro/dep_francemetro_2021.shp", options = "ENCODING=WINDOWS-1252") 
+
+dep= dep %>%
+  left_join(donnees%>%select(-Dept),
+            by=c("code"="Code"))
+```
+
+
+Méthode de Fisher
+```{r}
+mf_map(x= dep,
+       var = "Tx_pauvrete",
+       type = "choro",
+       nbreaks = 4,
+       breaks = "jenks"
 )
 
 ```
 
-l'objet obtenu contient deux informations: 
+Méthode des classes de même amplitude
+
+```{r}
+mf_map(x= dep,
+       var = "Tx_pauvrete",
+       type = "choro",
+       nbreaks = 4,
+       breaks = "equal"
+)
+```
+
+
+
+```{r}
+mf_map(x= dep,
+       var = "Tx_pauvrete",
+       type = "choro",
+       nbreaks = 4,
+       breaks = "quantile"
+)
+```
+
+### Question2
+Dans un 2e temps, vous ferez un découpages manuel avec les seuils suivants : 0, 13, 17, 25, max(Tx_pauvrete). La carte contiendra également un zoom sur Paris et sa petite couronne (departements 75, 92, 93, 94).
+
+creation d'un encadre pour notre carte
+```{r}
+mf_map(x= dep,
+       var = "Tx_pauvrete",
+       type = "choro",
+       nbreaks = 4,
+       breaks = "quantile"
+)
+mf_inset_on(x= dep, pos = "topright",
+            cex= ,2)
+mf_init(dep %>%
+          filter(code  %in% c("75", "92", "93", "94")))
+mf_map(dep %>%
+         filter(code  %in% c("75", "92", "93", "94")),
+       var = "Tx_pauvrete",
+       type = "choro",
+       breaks = c(0, 13, 17, 25, max(dep$Tx_pauvrete)),
+       pal= couleur,
+       leg_pos = NA)
+
+#mf_inset_on(x= dep,pos= "topright",
+            )
+
+
+```
+```{r}
+
+```
 
