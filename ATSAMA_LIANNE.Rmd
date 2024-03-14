@@ -1,0 +1,330 @@
+---
+title: "TP noté - Introduction à la statistique spatiale"
+authors : ATSAMA AHANDA LIANNE CEDRIQUE
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## **Consignes:**
+
+**LE TP DURE 2H**
+
+- Le TP se fait seul(e). Le smartphone est interdit. Tous les documents (y compris les programmes des TP précédents) et internet sont autorisés. En revanche, toute communication et toute aide de type IA est interdite (Chatgpt ou Gemini en particulier) sous d'exclusion de l'examen. 
+
+- Vous travaillerez directement dans le sujet. Vous nommerez le programme de la manière suivante: Nom.Rmd. Pour rajouter des chuncks de code sous chaque question, vous pouvez utiliser le raccourci clavier CTRL+MAJ+I
+
+
+---
+
+
+0. Commencer par renseigner votre nom et prénom en face de "authors:" en haut du programme. Pour le TP, vous aurez besoin des packages suivants :
+
+
+```{r}
+library(dplyr)
+library(sf)
+library(mapsf)
+library(spdep)
+```
+
+
+### Exercice 1
+
+Nous disposons de données économiques sur la ville de New York. Les observations sont découpées en "Neighborhood Tabulation Areas" (NTA). Il s'agit d'un découpage utilisé pour le recensement aux Etats-Unis. 
+
+
+1. Importer le fichier econ_2016acs5yr_nta.xlsx avec la fonction readxl::read_xlsx(). Ne conserver que les colonnes GeoID (id du NTA), GeogName (nom du NTA), PerCapIncE (Per Capita Income Estimates). Vous pouvez nommer votre fichier nta_nyc.
+
+```{r}
+library(readxl)
+
+# Import des données 
+nta_nyc= read_xlsx("econ_2016acs5yr_nta.xlsx") 
+
+# 
+nta_nyc<-nta_nyc %>% 
+  select(GeoID, GeogName, PerCapIncE )
+
+
+```
+
+
+
+2. Importer le fond géographique des NTA (geo_nta.gpkg). Quel est le systeme de projection du fond ?
+Dresser la carte des NTA en ne faisant apparaître que les polygônes.
+
+```{r}
+#Import du fond
+fond_nta= st_read("geo_nta.gpkg")
+st_crs(fond_nta)
+```
+Le système de projection est de type WGS84(DD). 
+
+```{r}
+#la carte: 
+plot(st_geometry(fond_nta), lwd = 0.5)
+```
+
+
+
+
+
+3. Faites la jointure entre ces 2 tables.
+
+```{r}
+#jointure
+fd= full_join(fond_nta,nta_nyc,by=c("ntacode"= "GeoID")) 
+```
+
+
+4. Représenter la variable de revenu par tête sous forme de carte. Pour cela, vous discrétiserez votre variable (découpage en classes). A vous de choisir la méthode qui vous semble la plus pertinente.
+
+```{r}
+plot(fd["PerCapIncE"], breaks = "jenks") # analyse avec discrétisation automatique
+
+# la méthode de Jenks me semble être la plus pertinente ici.
+
+library(mapview)
+
+mapview(
+  fd,
+  z=c("PerCapIncE"),
+  alpha.regions=0.35,
+  layer.name="revenu par tête",
+  label="libelle"
+)
+```
+
+
+
+5a. La carte semble-t-elle suggérer un phénomène d'autocorrélation spatiale ? A vous de le vérifier avec les outils vus en cours. Vous expliquerez chaque étape de votre démarche et commenterez vos résultats.
+Vous veillerez à retirer préalablement les valeurs manquantes pour faciliter vos traitements.
+
+```{r}
+#valeurs manquantes
+fd<-fd %>% 
+  filter(!is.na(PerCapIncE))
+
+```
+
+ Pour nous faire une première idée de la dimension spatiale de la distribution des revenus, nous allons représenter les mêmes revenus mais distribués de manière aléatoire. On pourra ainsi comparer la carte de la distribution réelle des revenus avec la carte de la distribution aléatoire. Ainsi,
+
+a.  créons une permutation aléatoire des revenus par tête médians  avec la fonction `sample()` et à partir de la variable `PerCapIncE` du fond nta. Nous stockerons ce vecteur dans une nouvelle variable du fond  nommée `PerCapIncE_ALEA`.
+
+```{r}
+set.seed(2024)
+fd <- fd %>% mutate(PerCapIncE_ALEA = sample(PerCapIncE))
+```
+
+b.  représentons sur une carte la distribution géographique de la variable que nous venons de créer. Comparons le résultat avec la carte réalisée sur la distribution réelle. Ceci nous permettra de répondre à la question de savoir si la distribution spatiale réelle des revenus est-elle proche de la distribution aléatoire
+
+```{r}
+#comparaison
+plot(fd["PerCapIncE"], breaks = "jenks")
+plot(fd["PerCapIncE_ALEA"], breaks = "jenks")
+```
+Au vu des figures, La comparaison des deux cartes semble suggérer que la carte représentant la distribution réelle des revenus est très différente de la carte d'une distribution aléatoire. Le phénomène semble spatialement corrélé.
+
+Pour corroborer la conclusion faite à partir de l'analyse visuelle , nous allons mesurer et tester le phénomène d'autocorrélation spatiale.
+
+Un phénomène est autocorrélé spatialement quand la valeur de la variable étudiée à un endroit donné est plus liée aux valeurs de ses voisins plutôt qu'à celles des autres. On parle d'*autocorrélation positive* si des voisins ont tendance à prendre des valeurs similaires et d'*autocorrélation négative* si des voisins ont tendance à prendre des valeurs différentes.
+
+Ainsi on peut se demander quel type d'autocorrélation spatiale, le phénomène étudié semble-t-il avoir.
+
+Ici il est difficile de donner un avis tranché, parce que dans certains cas,  des zones regroupant des nta à revenus par tête faibles sont entourés de celles à revenus par tête élévés et parfois le contraire. Mais dans la plupart du temps, l'autocorrélation négative semble être plus forte.
+
+ Pour étudier le phénomène, il nous faut construire une matrice de voisinage. Il existe plusieurs façons de définir le voisinage de nos nta.  nous allons définir le voisinage par la contiguïté : deux iris sont voisins s'ils sont contigus.
+
+Pour limiter la taille des objets créés, nous allons travailler avec des listes plutôt qu'avec des matrices carrées.
+
+Extraire la liste des voisins de chaque Iris. Pour cela, nous utiliserons la fonction `spdep::poly2nb()`. Par défaut, il s'agit de la contiguité dite `QUEEN` qui reprend les mouvements de la Reine aux échecs. 
+
+```{r}
+voisins <- poly2nb(fd) #par défaut: queen = TRUE
+str(voisins)
+summary(voisins)
+```
+
+ Nous allons transformer la matrice de contiguité en une matrice de pondérations. L'idée est d'affecter un poids identique à chacun des voisins d'un nta.
+
+
+- Créons une liste de poids à partir de la liste de voisins précédemment créée. Pour cela, utilisez la fonction `spdep::nb2listw()`, avec l'argument `zero.policy=TRUE` pour intégrer les Iris n'ayant potentiellement pas de voisins (par défaut, la fonction exclut les observations sans voisin).
+
+```{r}
+ponderation <- nb2listw(voisins, zero.policy = TRUE)
+```
+
+- Prenons connaissance de l'objet créé avec la fonction `str()` et l'argument `max.level = 1` et réalisant un résumé de la liste avec la fonction `summary()`.
+
+```{r}
+str(ponderation, max.level = 1)
+summary(ponderation) #zero.policy=TRUE
+```
+
+Il s'agit d'une liste de trois éléments :
+
+-   style = type de matrice (W =\> weigths)
+-   neighbours = liste des voisins (par exemple `ponderation$neighbours[[1]]` fournit la liste des voisins de la première observation)
+-   weights = liste des poids (par exemple `ponderation$weights[[1]]` fournit la liste des poids des voisins de la première observation)
+
+
+Une autre façon très visuelle de vérifier la présence d'une autocorrélation est de dresser le diagramme de Moran. La matrice de pondération calculée précédemment va nous permettre de le calculer.
+
+
+- Créons une variable des revenus disponibles centrés réduits avec la fonction `scale()`. 
+
+```{r}
+fd <- fd %>%
+  mutate(PerCapIncE_STD = scale(PerCapIncE))
+
+mean(fd$PerCapIncE_STD)
+sd(fd$PerCapIncE_STD)
+```
+
+-Dressons le diagramme de Moran avec la fonction `moran.plot()` à partir de la variable standardisée 
+
+```{r}
+moran.plot(
+  as.numeric(fd$PerCapIncE_STD),
+  listw = ponderation,
+  xlab = "Revenus par tête",
+  ylab = "Moyenne des revenus des voisins",
+  main = "Diagramme de Moran"
+)
+```
+
+ Le diagramme de Moran représente, pour chaque observation (ici un Iris), croise deux informations :\
+
+-   en abscisse, est représenté le revenu par tête observé au sein du nta (variable centrée réduite);
+-   en ordonnées, est représentée la moyenne des revenus par tête des voisins du nta observé.
+
+Interprétons les quatre cadrans du diagramme.
+
+-   cadran en haut à droite : `high-high` = nta aux revenus par tête élevés et dont les voisins ont également des revenus élevés;
+-   cadran en bas à droite : `high-low` =  nta aux revenus par tête élevés entourés de voisins à faibles revenus;
+-   cadran en bas à gauche : `low-low` = nta aux revenus par tête  faibles entourés  entourés de voisins également à faibles revenus;
+-   cadran en haut à gauche : `low-high` = nta aux revenus par tête faibles entourés de voisins aux revenus élevés.
+
+D'après le diagramme de Moran, les revenus par tête semblent-ils autocorrélés spatialement.
+
+
+
+Il existe une mesure globale de l'autocorrélation spatiale d'un phénomène. Il s'agit du **I de Moran**.
+
+
+- Calculons cet indice et sa significativité avec la fonction 
+
+```{r}
+moran.test(fd$PerCapIncE_STD, ponderation, randomisation = TRUE)
+```
+
+
+Le I de Moran vaut 0.61, ce qui est une valeur relativement élevée. Le test réalisé est le suivant :
+
+-   H0 : le I de Moran est nul, cad le phénomène n'est pas spatialement autocorrélé.
+-   H1 : I \> 0 (par défaut - en effet on soupçonne une autocorrélation négative - cette alternative est préférable)
+
+Ici, la p-valeur est très faible, conduisant à rejeter l'hypothèse nulle et donc à conclure/confirmer l'autocorrélation spatiale positive au sein du phénomène.
+
+ 
+ 
+5b. Commentez les valeurs des LISA associées aux observations n°20 (nta 	
+Far Rockaway-Bayswater) et n°80 (nta Midtown-Midtown South)
+
+```{r}
+#Calculons les Lisa
+mars_rev_lisa <- spdep::localmoran(fd$PerCapIncE, ponderation, zero.policy = TRUE)
+mars_rev_lisa[c(20,80),]
+```
+ l'indicateur local du nta Far Rockaway-Bayswater est positif, cela signifie qu'il est entouré de nta ayant des niveaux de revenus similaires.
+
+ l'indicateur local du nta Midtown-Midtown South est positif, cela signifie qu'il est entouré de nta ayant des niveaux de revenus similaires.
+
+```{r}
+table(mars_rev_lisa[,"Ii"] < 0)
+```
+
+
+153 nta sur 193 ont un Lisa négatif. L'autocorrélation étudiée localement est donc bien principalement négative 
+
+6. Faites une carte représentant les NTA pour lesquels le LISA est particulièrement significatif. Votre carte contiendra 4 couleurs : 
+
+- en rouge les NTA de type High-High significatifs au seuil de 10%, 
+- en bleu ceux de type Low-Low significatifs au seuil de 10%, 
+- en jaune les NTA avec autocorrélation négative significative au seuil de 10% 
+- en gris les NTA non significatifs au seuil de 10%.
+
+Un bonus sera accordé si vous faites la carte en dynamique (mapview ou leaflet)
+
+Ajoutons les Lisa comme une nouvelle variable du fond des nta
+
+```{r}
+fd <- fd %>% 
+  mutate(
+    LISA = mars_rev_lisa[,"Ii"]
+  )
+pal <- rev(RColorBrewer::brewer.pal(8, "RdYlBu"))
+plot(fd["LISA"], breaks = c(-8.5,-1.2,-0.7,-0.1,0,0.1,0.7,1.2,8.5), pal = pal)
+```
+
+on veut savoir si les Lisa calculés sont significativement différents de zéro.
+
+```{r}
+fd <- fd %>%
+  mutate(LISA_PVAL = mars_rev_lisa[,5])
+```
+
+Il s'agit de la cinquième colonne intitulée `Pr(z != E(Ii))`.
+
+Combien de LISA sont-ils significativement différents de zéro pour un niveau de confiance à 95% ?
+
+```{r}
+table(fd$LISA_PVAL < 0.05)
+summary(fd$LISA_PVAL)
+```
+
+Représentons alors sur une carte la p-valeur des LISA en choisissant les bornes d'intervalles suivantes : 0,0.01,0.05,0.1,1.
+
+```{r}
+plot(fd["LISA_PVAL"], breaks = c(0,0.01,0.05,0.1,1))
+```
+
+
+## Exercice 2 (non prioritaire, à faire dans un second temps)
+
+0. Importer les fonds geo_nta.gpkg et geo_boro.gpkg.
+
+```{r}
+geo_nta= st_read("geo_nta.gpkg")
+geo_boro= st_read("geo_boro.gpkg")
+
+```
+
+
+1. On souhaite savoir dans quel(s) quartier(s) ("Borough") appartient chaque NTA (variable boro_name)? Pour répondre à cette question vous ferez une intersection entre les fonds geo_nta.gpkg et geo_boro.gpkg. 
+
+```{r}
+fd_intersection <- st_intersection(geo_nta,geo_boro)
+
+```
+
+
+2. En utilisant la question précédente, combien y a t'il de NTA à cheval sur plusieurs quartiers ?
+
+
+
+
+3. Récupérez les noms de ces NTA à cheval sur plusieurs quartiers (on ne vous demande pas d'afficher quels sont les quartiers sur lesquels ils sont présents).
+
+
+4. Prenez un de ces NTA au choix et donner les quartiers sur lesquels il se trouve.
+
+```{r}
+
+```
+
+
+
